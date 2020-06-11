@@ -38,6 +38,9 @@ u_actual = func_u(x, t)
 X = np.vstack((x, t)).T 
 # X = (X-lb) / (ub  - lb)
 
+Y = np.expand_dims(u_actual, axis=-1) # Add extra axis to Y, so shape is now (5000, 1) instead of (5000, )
+
+
 # %%
 #Tensorflow Model
 
@@ -57,7 +60,7 @@ model.compile(optimizer='adam', loss='mse')
 
 model.fit(X, u_actual, # Fitting using the Keras API
           batch_size=500,
-          epochs=1000,
+          epochs=100,
           verbose=1)
 
 u_model_fit = model(X).numpy()
@@ -65,26 +68,8 @@ u_model_fit = model(X).numpy()
 
 # %%
 
-def shuffle_and_batch(X, Y, num_batches=50): # Shuffle and group the input data inot various datasizes. 
-    indices = tf.range(start=0, limit=tf.shape(X)[0], dtype=tf.int32) 
-    shuffled_indices = tf.random.shuffle(indices)
-    
-    X = tf.gather(X, shuffled_indices)
-    Y = tf.gather(Y, shuffled_indices)
-
-    X = tf.split(X, num_batches)
-    Y = tf.split(Y, num_batches)
-    return X, Y
-
-
-X_tf = tf.Variable(X, tf.float64) #Creating Tensors to treat as the inputs. 
-Y_tf = tf.Variable(u_actual, tf.float64)
-
-X_tf, Y_tf = shuffle_and_batch(X_tf, Y_tf)
-
-
 def loss(model, X, Y): # mean squared reconstruction error 
-    return tf.reduce_mean(tf.square(model(X, training=True) - Y))
+    return tf.math.reduce_mean(tf.math.squared_difference(model(X, training=True),  Y))
                           
 def loss_and_gradients(model, X, Y):
     with tf.GradientTape() as tape:
@@ -94,19 +79,22 @@ def loss_and_gradients(model, X, Y):
     
 
 optimizer = tf.keras.optimizers.Adam()
-nIter =1000
+nIter =100
 model = tf_model()
 
+dataset = tf.data.Dataset.from_tensor_slices((X, Y))
+dataset = dataset.shuffle(len(X)) # Shuffle takes a buffer size of elements to shuffle over, here we just shuffle the entire dataset
+dataset = dataset.batch(500)
+
 for it in range(nIter):
-    for batch_num in range(50):
-        loss_tf, grads_tf = loss_and_gradients(model, X_tf[batch_num], Y_tf[batch_num]) #Obtaining the loss and the gradients
+    for X_batch, Y_batch in dataset:
+        loss_tf, grads_tf = loss_and_gradients(model, X_batch, Y_batch) #Obtaining the loss and the gradients
         optimizer.apply_gradients(zip(grads_tf, model.trainable_variables)) #Applying the gradients for each step 
 
     tf.print('Iter : {}, loss : {}'.format(it, loss_tf))
     
 u_tf = model(X).numpy()
     
-
 
 # %%
 
@@ -119,9 +107,8 @@ model_torch = torch.nn.Sequential(
     )
 
 X_torch = torch.tensor(X, dtype=torch.float64).float()
-Y_torch = torch.tensor(u_actual, dtype=torch.float64).float()
+Y_torch = torch.tensor(Y, dtype=torch.float64).float()
 
-# X_torch, Y_torch = shuffle_and_batch_torch(X_torch, Y_torch)
 X_torch, Y_torch = torch.autograd.Variable(X_torch, requires_grad=True), torch.autograd.Variable(Y_torch, requires_grad=True) #Ensuring that tracing occurs. 
 
 traindata = torch.utils.data.TensorDataset(X_torch, Y_torch) #Loading, Shuffling and Batching the training data. 
@@ -134,7 +121,7 @@ def lossfunc_torch(model, X, Y): # Calculating the mean squared error,
     return loss
 
 optimizer = torch.optim.Adam(model_torch.parameters(), 0.001)    
-nIter = 1000
+nIter = 100
 
 
 for it in range(nIter):
